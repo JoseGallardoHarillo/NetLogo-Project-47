@@ -1,0 +1,241 @@
+;;----------------------------------- ID3 -----------------------------------------
+;; Library to create Decision Trees by using ID3 algorithm
+;;---------------------------------------------------------------------------------
+
+;; It works on datasets given as Dataframes (rows of data with some fixed structure 
+;; given by a header). In this version it works only with categorical (not numerical)
+;; attributes.
+
+;; Family of nodes that will build the Decision Tree
+breed [ID3:nodes ID3:node]
+
+ID3:nodes-own [
+  ID3:node-type ; Types: 
+                ;   0 -> Start, 
+                ;   1 -> Decision, 
+                ;   2 -> Answer
+  ID3:value     ; The value in the node depends on the type:
+                ;   0 -> Attribute to classify
+                ;   1 -> Splitting Attribute 
+                ;   2 -> Classification result
+  depth         ; For use with LayoutSpace.nls
+]
+
+;; Family of links that will build the Decision Tree
+directed-link-breed [ID3:links ID3:link]
+ID3:links-own [ID3:att_value]
+
+;; Dataframes are data matrix where the first row is the head. For our ID3, last column is 
+;; the attribute to classify.
+
+; Entropy of a list (according to the frequency of their elements)
+to-report entropy [l]
+  ; Compute the relative frequency of the elements
+  let l2 map [ x -> frec x l ] (remove-duplicates l)
+  ; Apply entropy to the list of frequencies
+  report sum map [ x -> ifelse-value (x = 0)[0][(-1) * x * log x 2] ] l2
+end
+
+; Report for relative frequency of an element in a list
+to-report frec [el L]
+  report (length (filter [ x -> x = el ] L)) / (length L)
+end
+
+; Report Relative Entropy of an attribute in a dataframe
+to-report entropy-rel [atr att-target df]
+  ; Extract values of the attribute
+  let vals  (DF:col atr df)
+  ; Acumulator for the relative entropy
+  let ent-rel 0
+  ; Para cada posible valor del atributo:
+  foreach remove-duplicates vals
+  [ x ->
+    ; Compute the relative frec of x
+    let f frec x vals
+    ; Take only rows with x in this column, and build a new dataframe with those rows
+    let df2 DF:filter-col atr x df
+    ; Compute the entropy of the last column in this new dataframe
+    let ex entropy  (DF:col att-target df2)
+    ; Accumulate it
+    set ent-rel ent-rel + f * ex
+  ]
+  report ent-rel
+end
+
+;; Gain Information in a dataframe for an attribute
+to-report GI [atr att-target df]
+  report (entropy  (DF:col att-target df)) - (entropy-rel atr att-target df)
+end
+
+; Report the attribute with max Gain Information in a dataframe
+to-report Max-GI [att-target df]
+  let other-atrs (remove att-target DF:header df)
+  let atr1 map [ x -> (list x (GI x att-target df) ) ] other-atrs
+  report first first sort-by [ [x y] -> (last x) > (last y) ] atr1
+end
+
+; Report the attribute with max Gain Information Ratio in a dataframe
+to-report Max-GR [df att-target]
+  let other-atrs (remove att-target DF:header df)
+  let atr1 map [ x -> (list x (ifelse-value ((entropy DF:col x df) = 0) [0] [(GI df x att-target) / (entropy DF:col x df)])) ] other-atrs
+  report first first sort-by [ [x y] -> (last x) > (last y) ] atr1
+end
+
+;; Main procedure to create the Decision Tree with ID3
+;;       df : Dataframe
+;; Reports the main root node 
+;; (later, we can ask this node to evaluate new data)
+
+to-report ID3:ID3 [att-target df]
+  let rep nobody
+
+  create-ID3:nodes 1 [
+    set ID3:node-type 0
+    set ID3:value att-target
+    create-ID3:link-to (ID3:ID3_aux att-target df) [set ID3:att_value ""]
+    set rep self
+    set depth 1
+  ]
+  report rep
+end
+
+; ID3 Algorithm recursive.
+;  Diferenciate between 
+;                   Answer-node (it is classified)
+;               and Decision-node (to be classified)
+;  Returns the node and, if it is Decision, then it generates the branches
+;  and resursively call itself with the new dataframes.
+to-report ID3:ID3_aux [att-target df]
+  let r nobody
+  ifelse length (DF:header df) = 1 
+  [
+    hatch-ID3:nodes 1
+    [
+      set ID3:node-type 2
+      set ID3:value "Failure"
+      set r self
+      set depth depth + 1
+    ]
+  ]
+  [ 
+    ifelse ID3:classified? att-target df
+    [
+      hatch-ID3:nodes 1
+      [
+        set ID3:node-type 2
+        set ID3:value one-of (DF:col att-target df);(word last last df)
+        set r self
+        set depth depth + 1
+      ]
+    ]
+    [
+      let mx Max-GI att-target df
+      hatch-ID3:nodes 1
+      [
+        set ID3:node-type 1
+        set ID3:value mx
+        set r self
+        set depth depth + 1
+        foreach (DF:col-values mx df)
+        [ x ->
+          create-ID3:link-to (ID3:ID3_aux att-target (DF:rem-col mx (DF:filter-col mx x df)))
+          [
+            set ID3:att_value x
+          ]
+        ]
+      ]
+    ]
+  ]
+  report r
+end
+
+; The C4.5 Algorithm can be obtained from standard ID3 by previously transforming the numerical
+; attributes to categorical decisions.
+to-report ID3:C4.5 [att-target Num-atts df]
+  output-print "Preparing Dataframe..."
+  set df (ID3:num2att Num-atts df)
+  output-print DF:pp df
+  output-print "Computing ID3..."
+  report ID3:ID3 att-target df
+end
+
+
+; Reports if a dataframe is classified or not
+to-report ID3:classified? [att-target df]
+;  let clas (last first df)
+  let #vals length (DF:col-values att-target df)
+;  let vals length remove-duplicates val
+  report (#vals = 1)
+end
+
+; Format the ID3 network 
+to ID3:format
+  ask ID3:nodes [
+    ;set shape (item ID3:node-type ["circle" "decision" "square 2"])
+    
+    
+    set color (item ID3:node-type (list (red + 1) (blue + 2) (green + 2)))
+    ask turtles with [color = red + 1][set shape "circle"]
+    ask turtles with [color = green + 2][set shape "triangle"]
+    ask turtles with [color = blue + 2][set shape "square"]
+    ;set size (item ID3:node-type [3 4 2])
+    set label ID3:value
+    set label-color black
+  ]
+  ask ID3:links [
+    set color gray + 2
+    set label ID3:att_value
+    set label-color gray - 2
+  ]
+end
+
+; Reports to evaluate a Decision Tree on new data
+; It must be called from an ID3:node 
+to-report ID3:evaluate [datum]
+  ifelse ID3:node-type = 0
+  [report [ID3:evaluate datum] of one-of out-ID3:link-neighbors]
+  [ifelse ID3:node-type = 2
+    [report ID3:value]
+    [
+      let val ID3:value-of ID3:value datum
+      let next-branch my-out-ID3:links with [ID3:att_value = val]
+      ifelse any? next-branch 
+        [
+          let next-node [end2] of one-of next-branch
+          report [ID3:evaluate datum] of next-node
+      ]
+      [
+        report "ID3:Failure"
+      ]
+    ]
+  ]
+end
+
+; Take the value of attribute att in datum dat.
+; The structure of d must be: [[att1 v1] [att2 v2] ...]
+to-report ID3:value-of [att dat]
+  let fil filter [x -> first x = att] dat
+  ifelse not empty? fil
+  [
+    report last first fil
+  ]
+  [ 
+    report "ID3:Failure"
+  ]
+end
+
+; Transform the attributes from Num-atts (numerical) into a set of 
+; categorical attributes (of the form "att <= val")
+to-report ID3:num2att [Num-atts df]
+  foreach Num-atts [
+    att ->
+    let vals sort DF:col-values att df
+    foreach vals [
+      v -> 
+      set df DF:add-calc-col (word att "<=" v) [r -> (DF:value att r df <= v)] df
+    ]
+    set df DF:rem-col att df
+  ]
+  report df
+end
+
