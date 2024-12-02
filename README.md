@@ -1,5 +1,5 @@
 # NetLogo-Proyect-47
-This project was developed using NetLogo as part of the Artificial Intelligence class during my Computer Engineering studies.
+Project developed using NetLogo as part of the Artificial Intelligence project during my Computer Engineering Degree.
 
 ## Requirements
 - **Netlogo version:** 6.2.0
